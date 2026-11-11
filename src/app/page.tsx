@@ -3,11 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
-import { FormEvent, useEffect, useRef, useState } from "react";
-import { FiArrowDownRight, FiArrowLeft, FiArrowRight, FiArrowUpRight, FiGlobe, FiMenu, FiPause, FiPlay, FiPlus, FiX } from "react-icons/fi";
+import { type FormEvent, useEffect, useRef, useState } from "react";
+import { FiAlertCircle, FiArrowDownRight, FiArrowLeft, FiArrowRight, FiArrowUpRight, FiCheck, FiGlobe, FiMenu, FiPause, FiPlay, FiPlus, FiX } from "react-icons/fi";
 import { copy, heroFilms, languages, projects, services, workCategories, type Language } from "@/data/site-content";
 
 const sectionIds = ["about", "areas", "works", "services", "contact"];
+
+type EnquiryToast = { success: boolean; message: string };
 
 function Marquee({ items, reverse = false }: { items: string[]; reverse?: boolean }) {
   const loopItems = [...items, ...items];
@@ -68,6 +70,9 @@ export default function Page() {
   const [heroPlaying, setHeroPlaying] = useState(true);
   const [activeWork, setActiveWork] = useState(0);
   const [showAllServices, setShowAllServices] = useState(false);
+  const [isProjectFormValid, setIsProjectFormValid] = useState(false);
+  const [isSubmittingProject, setIsSubmittingProject] = useState(false);
+  const [enquiryToast, setEnquiryToast] = useState<EnquiryToast | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const touchStartX = useRef<number | null>(null);
   const t = copy[language];
@@ -83,7 +88,7 @@ export default function Page() {
     videoRef.current?.play().then(() => {
       if (active) setHeroPlaying(true);
     }).catch(() => {
-      if (active) setHeroPlaying(false);
+      if (active) setHeroPlaying(false); 
     });
 
     return () => { active = false; };
@@ -93,19 +98,48 @@ export default function Page() {
     setActiveHero((current) => (current + direction + heroFilms.length) % heroFilms.length);
   };
 
-  const handleProjectSubmit = (event: FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    if (!enquiryToast) return;
+    const timeout = window.setTimeout(() => setEnquiryToast(null), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [enquiryToast]);
+
+  const updateProjectFormValidity = (event: FormEvent<HTMLFormElement>) => {
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const requiredFields = ["name", "email", "category", "message"];
+    setIsProjectFormValid(
+      form.checkValidity() &&
+      requiredFields.every((field) => String(formData.get(field) ?? "").trim().length > 0),
+    );
+  };
+
+  const handleProjectSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const subject = `Project enquiry from ${formData.get("name")}`;
-    const message = [
-      `Name: ${formData.get("name")}`,
-      `Email: ${formData.get("email")}`,
-      `Contact: ${formData.get("phone")}`,
-      `Project: ${formData.get("category")}`,
-      "",
-      String(formData.get("message")),
-    ].join("\n");
-    window.location.href = `mailto:hello@stairsky.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`;
+    const form = event.currentTarget;
+    if (!form.checkValidity() || !isProjectFormValid || isSubmittingProject) return;
+
+    setIsSubmittingProject(true);
+    setEnquiryToast(null);
+
+    try {
+      const response = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.fromEntries(new FormData(form).entries())),
+      });
+      const result: EnquiryToast = await response.json();
+      setEnquiryToast(result);
+
+      if (response.ok && result.success) {
+        form.reset();
+        setIsProjectFormValid(false);
+      }
+    } catch {
+      setEnquiryToast({ success: false, message: "We couldn't send your enquiry. Please try again." });
+    } finally {
+      setIsSubmittingProject(false);
+    }
   };
 
   return (
@@ -262,18 +296,35 @@ export default function Page() {
               <a className="font-editorial border-b border-white/35 pb-1 text-2xl transition-colors hover:border-[#d5ff54] hover:text-[#d5ff54] sm:text-3xl" href="mailto:hello@stairsky.com">hello@stairsky.com</a>
             </div>
           </div>
-          <form className="grid gap-x-5 gap-y-7 sm:grid-cols-2" onSubmit={handleProjectSubmit}>
+          <form className="grid gap-x-5 gap-y-7 sm:grid-cols-2" onChange={updateProjectFormValidity} onInput={updateProjectFormValidity} onSubmit={handleProjectSubmit}>
             <label className="contact-field">{t.formName}<input autoComplete="name" className="contact-input" name="name" placeholder="Jane Smith" required /></label>
             <label className="contact-field">{t.formEmail}<input autoComplete="email" className="contact-input" name="email" placeholder="jane@company.com" required type="email" /></label>
             <label className="contact-field">{t.formPhone}<input autoComplete="tel" className="contact-input" name="phone" placeholder="+91 00000 00000" type="tel" /></label>
             <label className="contact-field">{t.formCategory}<select className="contact-input appearance-none" defaultValue="" name="category" required>{t.formOptions.map((option, index) => <option className="bg-black text-white" disabled={index === 0} key={option} value={index === 0 ? "" : option}>{option}</option>)}</select></label>
             <label className="contact-field sm:col-span-2">{t.formMessage}<textarea className="contact-input min-h-24 resize-y" name="message" placeholder="What are you dreaming up?" required rows={2} /></label>
             <div className="sm:col-span-2">
-              <button className="group inline-flex items-center gap-4 border border-white/35 px-5 py-4 text-[10px] font-medium uppercase tracking-[0.15em] text-white transition-colors hover:border-[#d5ff54] hover:bg-[#d5ff54] hover:text-black" type="submit">{t.formSubmit}<FiArrowUpRight className="size-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" /></button>
+              <button aria-busy={isSubmittingProject} className="group inline-flex items-center gap-4 border border-white/35 px-5 py-4 text-[10px] font-medium uppercase tracking-[0.15em] text-white transition-colors hover:border-[#d5ff54] hover:bg-[#d5ff54] hover:text-black disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/35 disabled:hover:bg-transparent disabled:hover:text-white" disabled={!isProjectFormValid || isSubmittingProject} type="submit">{t.formSubmit}{isSubmittingProject ? <span aria-hidden="true" className="size-4 animate-spin rounded-full border border-current border-t-transparent" /> : <FiArrowUpRight className="size-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}</button>
               <p className="mt-4 text-[10px] leading-5 text-white/40">{t.formNote}</p>
             </div>
           </form>
         </div>
+        <AnimatePresence>
+          {enquiryToast && (
+            <motion.div
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              aria-live={enquiryToast.success ? "polite" : "assertive"}
+              className={`fixed bottom-6 right-6 z-[100] flex max-w-[calc(100vw-3rem)] items-start gap-3 border px-5 py-4 text-sm shadow-2xl sm:bottom-8 sm:right-8 sm:max-w-md ${enquiryToast.success ? "border-[#d5ff54]/40 bg-[#171a0d] text-white" : "border-red-300/40 bg-[#201010] text-white"}`}
+              exit={{ opacity: 0, y: 12, scale: 0.96 }}
+              initial={{ opacity: 0, y: 18, scale: 0.96 }}
+              role={enquiryToast.success ? "status" : "alert"}
+              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {enquiryToast.success ? <FiCheck className="mt-0.5 size-5 shrink-0 text-[#d5ff54]" /> : <FiAlertCircle className="mt-0.5 size-5 shrink-0 text-red-300" />}
+              <p className="flex-1 leading-6">{enquiryToast.message}</p>
+              <button aria-label="Dismiss notification" className="ml-1 shrink-0 p-0.5 text-white/60 transition-colors hover:text-white" onClick={() => setEnquiryToast(null)} type="button"><FiX className="size-4" /></button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </section>
 
       <footer className="bg-black px-6 pb-8 text-white sm:px-10 lg:px-16">
